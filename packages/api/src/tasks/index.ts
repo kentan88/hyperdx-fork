@@ -5,6 +5,7 @@ import { serializeError } from 'serialize-error';
 import { RUN_SCHEDULED_TASKS_EXTERNALLY } from '@/config';
 import CheckAlertTask from '@/tasks/checkAlerts';
 import CheckUptimeMonitorsTask from '@/tasks/checkUptimeMonitors';
+import CloudMetricsCollectorTask from '@/tasks/cloudMetricsCollector';
 import DetectAnomaliesTask from '@/tasks/detectAnomalies';
 import DiscoverServicesTask from '@/tasks/discoverServices';
 import {
@@ -38,6 +39,8 @@ function createTask(argv: TaskArgs): HdxTask<TaskArgs> {
       return new DiscoverServicesTask(argv);
     case TaskName.RUN_READINESS_CHECKS:
       return new RunReadinessChecksTask(argv);
+    case TaskName.COLLECT_CLOUD_METRICS:
+      return new CloudMetricsCollectorTask(argv);
     // If the taskName is not recognized, throw an error
     default:
       throw new Error(`Unknown task name ${taskName as string}`);

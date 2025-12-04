@@ -29,6 +29,7 @@ import {
   IconActivity,
   IconBell,
   IconChartDots,
+  IconCloud,
   IconDeviceLaptop,
   IconHeartbeat,
   IconLayoutGrid,
@@ -793,6 +794,9 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
                 isExpanded={isDashboardsExpanded}
                 onToggle={() => setIsDashboardExpanded(!isDashboardsExpanded)}
               />
+
+              <AppNavLink label="Cloud Providers" href="/cloud-providers" icon={<IconCloud size={18} />} />
+              <AppNavLink label="Cloud Infrastructure" href="/cloud-infrastructure" icon={<IconCloud size={18} />} />
 
               {!isCollapsed && (
                 <Collapse in={isDashboardsExpanded}>

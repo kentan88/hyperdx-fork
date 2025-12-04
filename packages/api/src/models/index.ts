@@ -45,3 +45,22 @@ export const connectDB = async () => {
 };
 
 export const mongooseConnection = mongoose.connection;
+
+export { default as Alert } from './alert';
+export { default as AlertHistory } from './alertHistory';
+export { Anomaly } from './anomaly';
+export { default as CloudProviderConnection } from './cloudProviderConnection';
+export { default as Connection } from './connection';
+export { default as Dashboard } from './dashboard';
+export { default as Incident } from './incident';
+export { SavedSearch } from './savedSearch';
+export { default as Service } from './service';
+export { default as ServiceCheck } from './serviceCheck';
+export { default as SLO } from './slo';
+export { Source, type ISource } from './source';
+export { default as Team } from './team';
+export { default as TeamInvite } from './teamInvite';
+export { default as UptimeCheckHistory } from './uptimeCheckHistory';
+export { default as UptimeMonitor } from './uptimeMonitor';
+export { default as User } from './user';
+export { default as Webhook } from './webhook';

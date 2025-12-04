@@ -8,6 +8,7 @@ export enum TaskName {
   DETECT_ANOMALIES = 'detect-anomalies',
   DISCOVER_SERVICES = 'discover-services',
   RUN_READINESS_CHECKS = 'run-readiness-checks',
+  COLLECT_CLOUD_METRICS = 'collect-cloud-metrics',
 }
 
 /**
@@ -60,6 +61,11 @@ const checkUptimeMonitorsTaskArgsSchema = z.object({
     .optional(),
 });
 
+const collectCloudMetricsTaskArgsSchema = z.object({
+  taskName: z.literal(TaskName.COLLECT_CLOUD_METRICS),
+  connectionId: z.string().optional(), // Specific connection ID to process
+});
+
 const taskArgsSchema = z.discriminatedUnion('taskName', [
   pingTaskArgsSchema,
   checkAlertsTaskArgsSchema,
@@ -68,6 +74,7 @@ const taskArgsSchema = z.discriminatedUnion('taskName', [
   detectAnomaliesTaskArgsSchema,
   discoverServicesTaskArgsSchema,
   runReadinessChecksTaskArgsSchema,
+  collectCloudMetricsTaskArgsSchema,
 ]);
 
 export type PingTaskArgs = z.infer<typeof pingTaskArgsSchema>;
@@ -77,6 +84,7 @@ export type CheckUptimeMonitorsTaskArgs = z.infer<typeof checkUptimeMonitorsTask
 export type DetectAnomaliesTaskArgs = z.infer<typeof detectAnomaliesTaskArgsSchema>;
 export type DiscoverServicesTaskArgs = z.infer<typeof discoverServicesTaskArgsSchema>;
 export type RunReadinessChecksTaskArgs = z.infer<typeof runReadinessChecksTaskArgsSchema>;
+export type CloudMetricsCollectorArgs = z.infer<typeof collectCloudMetricsTaskArgsSchema>;
 export type TaskArgs = z.infer<typeof taskArgsSchema>;
 
 /**
