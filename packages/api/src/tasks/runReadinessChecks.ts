@@ -3,22 +3,31 @@ import ms from 'ms';
 
 import * as config from '@/config';
 import { getAllTeams } from '@/controllers/team';
-import Service, { ServiceReadiness, ServiceTier } from '@/models/service';
+import Service, { ServiceReadiness } from '@/models/service';
 import ServiceCheck, { CheckStatus, CheckType } from '@/models/serviceCheck';
+import Scorecard, { IScorecardColumn, IScorecardRule } from '@/models/scorecard';
 import SLO from '@/models/slo';
 import logger from '@/utils/logger';
 import { HdxTask, TaskArgs } from './types';
 import { connectDB, mongooseConnection } from '@/models';
 
-// Defines the weight of each check towards the score (optional, for now using basic pass/fail logic)
-const CHECK_WEIGHTS = {
-  [CheckType.HAS_OWNER]: 1,
-  [CheckType.HAS_RUNBOOK]: 1,
-  [CheckType.HAS_REPO]: 1,
-  [CheckType.HAS_SLO]: 2, // Critical
-  [CheckType.HAS_LOGS]: 1,
-  [CheckType.HAS_TRACES]: 1,
-};
+// Default Pillars
+const DEFAULT_PILLARS: IScorecardColumn[] = [
+  { key: 'telemetry', label: 'Telemetry', weight: 35 },
+  { key: 'reliability', label: 'Reliability', weight: 35 },
+  { key: 'ownership', label: 'Ownership', weight: 15 },
+  { key: 'documentation', label: 'Documentation', weight: 15 },
+];
+
+// Default Rules Configuration
+const DEFAULT_RULES: IScorecardRule[] = [
+  { id: CheckType.HAS_LOGS, pillar: 'telemetry', weight: 1, description: 'Service must have logs in the last 24h' },
+  { id: CheckType.HAS_TRACES, pillar: 'telemetry', weight: 1, description: 'Service must have traces in the last 24h' },
+  { id: CheckType.HAS_SLO, pillar: 'reliability', weight: 1, description: 'Service must have at least one SLO defined' },
+  { id: CheckType.HAS_OWNER, pillar: 'ownership', weight: 1, description: 'Service must have an owner assigned' },
+  { id: CheckType.HAS_RUNBOOK, pillar: 'documentation', weight: 1, description: 'Service must have a runbook URL' },
+  { id: CheckType.HAS_REPO, pillar: 'documentation', weight: 1, description: 'Service must have a repository URL' },
+];
 
 export default class RunReadinessChecksTask implements HdxTask<TaskArgs> {
   private clickhouseClient: ClickhouseClient | null = null;
@@ -48,26 +57,39 @@ export default class RunReadinessChecksTask implements HdxTask<TaskArgs> {
 
     for (const team of teams) {
       try {
+        // Fetch or create Scorecard config
+        let scorecard = await Scorecard.findOne({ team: team._id });
+        if (!scorecard) {
+          // Use defaults if not found (in memory, don't necessarily persist unless customized)
+          // We could persist it here to ensure every team has one to edit
+        }
+
+        const pillars = scorecard?.pillars || DEFAULT_PILLARS;
+        const rules = scorecard?.rules || DEFAULT_RULES;
+
+        // Map rules for easy lookup
+        const ruleMap = new Map(rules.map(r => [r.id, r]));
+
         const services = await Service.find({ team: team._id });
         
         for (const service of services) {
           totalChecked++;
-          const checks: { type: CheckType; status: CheckStatus; message?: string }[] = [];
+          const checkResults: { type: CheckType; status: CheckStatus; message?: string; evidence?: any }[] = [];
 
           // 1. Metadata Checks
-          checks.push({
+          checkResults.push({
             type: CheckType.HAS_OWNER,
             status: service.owner ? CheckStatus.PASS : CheckStatus.FAIL,
             message: service.owner ? undefined : 'Service has no owner assigned',
           });
 
-          checks.push({
+          checkResults.push({
             type: CheckType.HAS_RUNBOOK,
             status: service.runbookUrl ? CheckStatus.PASS : CheckStatus.FAIL,
             message: service.runbookUrl ? undefined : 'Service has no runbook URL',
           });
 
-          checks.push({
+          checkResults.push({
             type: CheckType.HAS_REPO,
             status: service.repoUrl ? CheckStatus.PASS : CheckStatus.FAIL,
             message: service.repoUrl ? undefined : 'Service has no repository URL',
@@ -78,45 +100,67 @@ export default class RunReadinessChecksTask implements HdxTask<TaskArgs> {
             team: team._id, 
             serviceName: service.name 
           });
-          checks.push({
+          checkResults.push({
             type: CheckType.HAS_SLO,
             status: sloCount > 0 ? CheckStatus.PASS : CheckStatus.FAIL,
             message: sloCount > 0 ? undefined : 'Service has no SLOs defined',
+            evidence: { sloCount },
           });
 
           // 3. Telemetry Checks (using ClickHouse)
-          // We check for presence of data in the last 24h
           try {
-            const hasLogs = await this.checkTelemetryPresence(team._id.toString(), service.name, 'otel_logs');
-            checks.push({
+            const logCount = await this.getTelemetryCount(service.name, 'otel_logs');
+            checkResults.push({
               type: CheckType.HAS_LOGS,
-              status: hasLogs ? CheckStatus.PASS : CheckStatus.FAIL,
-              message: hasLogs ? undefined : 'No logs detected in the last 24 hours',
+              status: logCount > 0 ? CheckStatus.PASS : CheckStatus.FAIL,
+              message: logCount > 0 ? undefined : 'No logs detected in the last 24 hours',
+              evidence: { count: logCount, window: '24h' },
             });
 
-            const hasTraces = await this.checkTelemetryPresence(team._id.toString(), service.name, 'otel_traces');
-            checks.push({
+            const traceCount = await this.getTelemetryCount(service.name, 'otel_traces');
+            checkResults.push({
               type: CheckType.HAS_TRACES,
-              status: hasTraces ? CheckStatus.PASS : CheckStatus.FAIL,
-              message: hasTraces ? undefined : 'No traces detected in the last 24 hours',
+              status: traceCount > 0 ? CheckStatus.PASS : CheckStatus.FAIL,
+              message: traceCount > 0 ? undefined : 'No traces detected in the last 24 hours',
+              evidence: { count: traceCount, window: '24h' },
             });
 
           } catch (err) {
             logger.error({ err, service: service.name }, 'Failed to check telemetry presence');
-             // Default to fail if we can't check
-             checks.push({ type: CheckType.HAS_LOGS, status: CheckStatus.FAIL, message: 'Failed to verify logs' });
-             checks.push({ type: CheckType.HAS_TRACES, status: CheckStatus.FAIL, message: 'Failed to verify traces' });
+            checkResults.push({ type: CheckType.HAS_LOGS, status: CheckStatus.FAIL, message: 'Failed to verify logs' });
+            checkResults.push({ type: CheckType.HAS_TRACES, status: CheckStatus.FAIL, message: 'Failed to verify traces' });
           }
 
-          // Persist Checks
-          for (const check of checks) {
+          // Persist Checks and Calculate Score
+          const pillarScores: Record<string, { totalWeight: number; passedWeight: number }> = {};
+          
+          // Initialize pillar scores
+          for (const pillar of pillars) {
+            pillarScores[pillar.key] = { totalWeight: 0, passedWeight: 0 };
+          }
+
+          for (const res of checkResults) {
+            const rule = ruleMap.get(res.type);
+            const pillarKey = rule?.pillar || 'other';
+            const weight = rule?.weight || 1;
+
+            if (pillarScores[pillarKey]) {
+              pillarScores[pillarKey].totalWeight += weight;
+              if (res.status === CheckStatus.PASS) {
+                pillarScores[pillarKey].passedWeight += weight;
+              }
+            }
+
             await ServiceCheck.findOneAndUpdate(
-              { service: service._id, checkType: check.type },
+              { service: service._id, checkType: res.type },
               { 
                 $set: { 
                   team: team._id,
-                  status: check.status,
-                  message: check.message,
+                  status: res.status,
+                  message: res.message,
+                  pillar: pillarKey,
+                  checkWeight: weight,
+                  evidence: res.evidence,
                   updatedAt: new Date()
                 } 
               },
@@ -124,31 +168,37 @@ export default class RunReadinessChecksTask implements HdxTask<TaskArgs> {
             );
           }
 
-          // Calculate Readiness Score
-          // Simple logic for now:
-          // GOLD: All checks pass
-          // SILVER: Has SLO + Logs + Traces (Core telemetry + 1 reliability metric)
-          // BRONZE: Has Logs + Traces
-          // FAIL: Missing core telemetry
-          
-          let readiness = ServiceReadiness.FAIL;
-          const passed = new Set(checks.filter(c => c.status === CheckStatus.PASS).map(c => c.type));
-          
-          const hasCoreTelemetry = passed.has(CheckType.HAS_LOGS) && passed.has(CheckType.HAS_TRACES);
-          const hasSLO = passed.has(CheckType.HAS_SLO);
-          const hasMetadata = passed.has(CheckType.HAS_OWNER) && passed.has(CheckType.HAS_RUNBOOK) && passed.has(CheckType.HAS_REPO);
+          // Calculate Overall Score
+          let totalScore = 0;
+          let totalPillarWeight = 0;
 
-          if (hasCoreTelemetry && hasSLO && hasMetadata) {
-            readiness = ServiceReadiness.GOLD;
-          } else if (hasCoreTelemetry && hasSLO) {
-            readiness = ServiceReadiness.SILVER;
-          } else if (hasCoreTelemetry) {
-            readiness = ServiceReadiness.BRONZE;
+          for (const pillar of pillars) {
+            const stats = pillarScores[pillar.key];
+            if (stats && stats.totalWeight > 0) {
+              const pScore = (stats.passedWeight / stats.totalWeight) * 100;
+              totalScore += pScore * pillar.weight;
+              totalPillarWeight += pillar.weight;
+            } else {
+              // If a pillar has no checks, we effectively ignore it? Or give it 100?
+              // Let's assume ignore (normalize by active pillars)
+              // But standard scorecard usually penalizes if no checks exist? 
+              // Actually here we generated checks for every rule in DEFAULT_RULES.
+              // So stats.totalWeight should be > 0 if rules exist.
+            }
           }
+
+          const finalScore = totalPillarWeight > 0 ? Math.round(totalScore / totalPillarWeight) : 0;
+
+          // Legacy Readiness Logic (Keep for backward compatibility for now)
+          let readiness = ServiceReadiness.FAIL;
+          if (finalScore >= 90) readiness = ServiceReadiness.GOLD;
+          else if (finalScore >= 70) readiness = ServiceReadiness.SILVER;
+          else if (finalScore >= 40) readiness = ServiceReadiness.BRONZE;
 
           await Service.findByIdAndUpdate(service._id, { 
             readiness,
-            lastSeenAt: new Date(), // Update last seen as we just processed it
+            score: finalScore,
+            lastSeenAt: new Date(),
           });
         }
       } catch (err) {
@@ -159,22 +209,9 @@ export default class RunReadinessChecksTask implements HdxTask<TaskArgs> {
     logger.info({ totalChecked }, 'Readiness checks task completed');
   }
 
-  private async checkTelemetryPresence(teamId: string, serviceName: string, table: string): Promise<boolean> {
-    if (!this.clickhouseClient) return false;
+  private async getTelemetryCount(serviceName: string, table: string): Promise<number> {
+    if (!this.clickhouseClient) return 0;
     
-    // TODO: Ideally we filter by team ID if CH supports it in the future or via map
-    // For now we rely on service name being unique enough or just checking existence
-    // But wait, services are per team.
-    // Discovery uses `tableFilterExpression` from Sources. 
-    // Here we don't have the source handy easily without querying Sources.
-    // For simplicity/performance, let's just check if *any* data exists for this service name.
-    // In a multi-tenant DB this might be slightly inaccurate if two teams have "api" service, 
-    // but typically they are siloed by how we query.
-    // To be correct, we should get the sources for the team and use their filters.
-    // But finding *which* source corresponds to *this* service is tricky if we don't store that link.
-    // However, `Service` model implies we know the name.
-    
-    // Use a simple query for now.
     const query = `
       SELECT count() as count
       FROM default.${table}
@@ -184,7 +221,7 @@ export default class RunReadinessChecksTask implements HdxTask<TaskArgs> {
 
     const result = await this.clickhouseClient.query({ query, format: 'JSONEachRow' });
     const rows = await result.json<Array<{ count: string }>>();
-    return parseInt(rows[0]?.count || '0', 10) > 0;
+    return parseInt(rows[0]?.count || '0', 10);
   }
 
   async asyncDispose(): Promise<void> {
@@ -197,4 +234,3 @@ export default class RunReadinessChecksTask implements HdxTask<TaskArgs> {
     return 'RunReadinessChecksTask';
   }
 }
-

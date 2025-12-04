@@ -33,6 +33,7 @@ export interface IService {
   // State
   lastSeenAt: Date;
   readiness?: ServiceReadiness;
+  score?: number;
   
   // Timestamps
   createdAt: Date;
@@ -83,6 +84,11 @@ const ServiceSchema = new Schema<IService>(
       type: String,
       enum: Object.values(ServiceReadiness),
       default: ServiceReadiness.FAIL,
+    },
+    score: {
+      type: Number,
+      required: false,
+      default: 0,
     },
   },
   {

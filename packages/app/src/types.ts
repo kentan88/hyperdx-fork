@@ -324,6 +324,9 @@ export interface ServiceCheck {
   checkType: CheckType;
   status: CheckStatus;
   message?: string;
+  pillar?: string;
+  checkWeight?: number;
+  evidence?: any;
   updatedAt: string;
 }
 
@@ -342,6 +345,7 @@ export interface Service {
   // State
   lastSeenAt: string;
   readiness?: ServiceReadiness;
+  score?: number;
   
   // Timestamps
   createdAt: string;

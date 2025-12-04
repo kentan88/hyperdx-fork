@@ -2,9 +2,10 @@ import express from 'express';
 import { z } from 'zod';
 import { validateRequest } from 'zod-express-middleware';
 
-import { getServices, updateService, getService, getServiceChecks } from '@/controllers/services';
+import { getServices, updateService, getService, getServiceChecks, reportServiceCheck } from '@/controllers/services';
 import { getNonNullUserWithTeam } from '@/middleware/auth';
 import { ServiceTier } from '@/models/service';
+import { CheckStatus } from '@/models/serviceCheck';
 import { objectIdSchema } from '@/utils/zod';
 
 const router = express.Router();
@@ -69,6 +70,38 @@ router.patch(
       }
 
       return res.json(updatedService);
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+router.post(
+  '/:name/checks',
+  validateRequest({
+    body: z.object({
+      checkType: z.string(),
+      status: z.nativeEnum(CheckStatus),
+      message: z.string().optional(),
+      pillar: z.string().optional(),
+      checkWeight: z.number().optional(),
+      evidence: z.any().optional(),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const { teamId } = getNonNullUserWithTeam(req);
+      const check = await reportServiceCheck(
+        teamId.toString(),
+        req.params.name,
+        req.body
+      );
+
+      if (!check) {
+        return res.status(404).json({ error: 'Service not found' });
+      }
+
+      return res.json(check);
     } catch (e) {
       next(e);
     }

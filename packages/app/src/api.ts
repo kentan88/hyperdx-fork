@@ -822,5 +822,22 @@ const api = {
         }).json(),
     });
   },
+  // Scorecard hooks
+  useScorecard(options?: UseQueryOptions<any, Error>) {
+    return useQuery({
+      queryKey: ['scorecard'],
+      queryFn: () => hdxServer('scorecards', { method: 'GET' }).json(),
+      ...options,
+    });
+  },
+  useUpdateScorecard() {
+    return useMutation({
+      mutationFn: async (updates: any) =>
+        hdxServer('scorecards', {
+          method: 'PUT',
+          json: updates,
+        }).json(),
+    });
+  },
 };
 export default api;

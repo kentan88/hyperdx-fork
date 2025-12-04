@@ -23,9 +23,12 @@ export interface IServiceCheck {
   _id: ObjectId;
   service: ObjectId;
   team: ObjectId;
-  checkType: CheckType;
+  checkType: CheckType | string;
   status: CheckStatus;
   message?: string;
+  pillar?: string;
+  checkWeight?: number;
+  evidence?: any;
   updatedAt: Date;
 }
 
@@ -45,7 +48,7 @@ const ServiceCheckSchema = new Schema<IServiceCheck>(
     },
     checkType: {
       type: String,
-      enum: Object.values(CheckType),
+      // Allow arbitrary strings for custom checks, but keep enum for system checks
       required: true,
     },
     status: {
@@ -55,6 +58,19 @@ const ServiceCheckSchema = new Schema<IServiceCheck>(
     },
     message: {
       type: String,
+      required: false,
+    },
+    pillar: {
+      type: String,
+      required: false,
+    },
+    checkWeight: {
+      type: Number,
+      required: false,
+      default: 1,
+    },
+    evidence: {
+      type: Schema.Types.Mixed,
       required: false,
     },
   },

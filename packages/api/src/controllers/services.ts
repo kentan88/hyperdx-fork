@@ -1,8 +1,9 @@
 import mongoose from 'mongoose';
 
 import Service, { IService, ServiceTier } from '@/models/service';
-import ServiceCheck, { IServiceCheck } from '@/models/serviceCheck';
+import ServiceCheck, { CheckStatus, IServiceCheck } from '@/models/serviceCheck';
 import { ObjectId } from '@/models';
+import { calculateServiceScore } from '@/services/scorecard';
 
 export async function getServices(teamId: string): Promise<IService[]> {
   return Service.find({ team: teamId }).sort({ name: 1 });
@@ -30,4 +31,43 @@ export async function updateService(
     { $set: updates },
     { new: true }
   );
+}
+
+export async function reportServiceCheck(
+  teamId: string,
+  serviceName: string,
+  check: {
+    checkType: string;
+    status: CheckStatus;
+    message?: string;
+    pillar?: string;
+    checkWeight?: number;
+    evidence?: any;
+  }
+): Promise<IServiceCheck | null> {
+  const service = await Service.findOne({ team: teamId, name: serviceName });
+  if (!service) {
+    return null;
+  }
+
+  const result = await ServiceCheck.findOneAndUpdate(
+    { service: service._id, checkType: check.checkType },
+    {
+      $set: {
+        team: teamId,
+        status: check.status,
+        message: check.message,
+        pillar: check.pillar,
+        checkWeight: check.checkWeight,
+        evidence: check.evidence,
+        updatedAt: new Date(),
+      },
+    },
+    { upsert: true, new: true }
+  );
+
+  // Recalculate score asynchronously (or await if critical)
+  await calculateServiceScore(service._id, new mongoose.Types.ObjectId(teamId));
+
+  return result;
 }

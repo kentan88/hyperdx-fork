@@ -7,12 +7,14 @@ import api from '@/api';
 import { ServiceReadinessBadge } from '@/components/ServiceReadiness/ServiceReadinessBadge';
 import { ServiceSettingsModal } from '@/components/ServiceReadiness/ServiceSettingsModal';
 import { ReadinessDetailsModal } from '@/components/ServiceReadiness/ReadinessDetailsModal';
+import { ScorecardSettingsModal } from '@/components/ServiceReadiness/ScorecardSettingsModal';
 import { Service } from '@/types';
 
 export function ServiceDirectoryTab() {
   const { data: services, isLoading, refetch } = api.useRegistryServices();
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [detailsService, setDetailsService] = useState<Service | null>(null);
+  const [isScorecardSettingsOpen, setIsScorecardSettingsOpen] = useState(false);
 
   if (isLoading) {
     return <Text>Loading services...</Text>;
@@ -20,6 +22,12 @@ export function ServiceDirectoryTab() {
 
   return (
     <div>
+      <Group justify="flex-end" mb="md">
+        <Button variant="outline" leftSection={<IconSettings size={16} />} onClick={() => setIsScorecardSettingsOpen(true)}>
+          Scorecard Settings
+        </Button>
+      </Group>
+      
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
@@ -44,7 +52,14 @@ export function ServiceDirectoryTab() {
               </Table.Td>
               <Table.Td>
                 <div style={{ cursor: 'pointer' }} onClick={() => setDetailsService(service)}>
-                  <ServiceReadinessBadge readiness={service.readiness} />
+                  <Group gap="xs">
+                    <ServiceReadinessBadge readiness={service.readiness} />
+                    {service.score !== undefined && (
+                      <Text size="sm" fw={700} c={service.score < 50 ? 'red' : service.score < 80 ? 'orange' : 'green'}>
+                        {service.score}%
+                      </Text>
+                    )}
+                  </Group>
                 </div>
               </Table.Td>
               <Table.Td>
@@ -97,6 +112,11 @@ export function ServiceDirectoryTab() {
           service={detailsService}
         />
       )}
+
+      <ScorecardSettingsModal
+        opened={isScorecardSettingsOpen}
+        onClose={() => setIsScorecardSettingsOpen(false)}
+      />
     </div>
   );
 }
