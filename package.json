@@ -42,7 +42,9 @@
     "alert-task": "npx concurrently -k -n 'ALERT-TASK' -c 'green.bold' 'RUN_SCHEDULED_TASKS_EXTERNALLY=false nx run @hyperdx/api:dev-task check-alerts'",
     "slo-task": "npx concurrently -k -n 'SLO-TASK' -c 'green.bold' 'RUN_SCHEDULED_TASKS_EXTERNALLY=false nx run @hyperdx/api:dev-task check-slos'",
     "anomaly-task": "npx concurrently -k -n 'ANOMALY-TASK' -c 'green.bold' 'RUN_SCHEDULED_TASKS_EXTERNALLY=false nx run @hyperdx/api:dev-task detect-anomalies'",
-    "uptime-task": "npx concurrently -k -n 'UPTIME-TASK' -c 'green.bold' 'RUN_SCHEDULED_TASKS_EXTERNALLY=false nx run @hyperdx/api:dev-task check-uptime-monitors'"
+    "uptime-task": "npx concurrently -k -n 'UPTIME-TASK' -c 'green.bold' 'RUN_SCHEDULED_TASKS_EXTERNALLY=false nx run @hyperdx/api:dev-task check-uptime-monitors'",
+    "readiness-task": "npx concurrently -k -n 'READINESS-TASK' -c 'green.bold' 'RUN_SCHEDULED_TASKS_EXTERNALLY=false nx run @hyperdx/api:dev-task run-readiness-checks'",
+    "discover-services-task": "npx concurrently -k -n 'DISCOVER-SERVICES-TASK' -c 'green.bold' 'RUN_SCHEDULED_TASKS_EXTERNALLY=false nx run @hyperdx/api:dev-task discover-services'"
   },
   "lint-staged": {
     "packages/api/src/routers/external-api/**/*.ts": [
