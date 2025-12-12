@@ -20,6 +20,17 @@ export type SLOInput = {
   filter?: string;
   goodCondition?: string;
   alertThreshold?: number;
+  burnAlerts?: {
+    enabled: boolean;
+    thresholds: Array<{
+      burnRate: number;
+      severity: 'warning' | 'critical';
+    }>;
+    channel?: {
+      type: 'webhook';
+      webhookId: string;
+    } | null;
+  };
 };
 
 // Inject time filter into a raw query string

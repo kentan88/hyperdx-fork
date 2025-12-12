@@ -4,8 +4,14 @@ import ms from 'ms';
 
 import * as config from '@/config';
 import { injectTimeFilter } from '@/controllers/slo';
+import {
+  checkSLOBurnAlerts,
+  sendSLOBurnAlert,
+} from '@/controllers/sloAlerts';
+import { getSLOStatus } from '@/controllers/sloStatus';
 import { connectDB, mongooseConnection } from '@/models';
 import SLO from '@/models/slo';
+import Webhook, { IWebhook } from '@/models/webhook';
 import { CheckSlosTaskArgs, HdxTask } from '@/tasks/types';
 import logger from '@/utils/logger';
 
@@ -84,6 +90,17 @@ export default class RunSLOChecksTask implements HdxTask<CheckSlosTaskArgs> {
     const lastMinute = new Date(now);
     lastMinute.setSeconds(0, 0);
     const endTime = lastMinute;
+
+    // Fetch webhooks for all teams (grouped by team)
+    const teamWebhooksMap = new Map<string, Map<string, IWebhook>>();
+    const uniqueTeamIds = Array.from(
+      new Set(slos.map(s => s.team.toString())),
+    );
+    for (const teamId of uniqueTeamIds) {
+      const webhooks = await Webhook.find({ team: teamId });
+      const webhookMap = new Map(webhooks.map(w => [w.id, w]));
+      teamWebhooksMap.set(teamId, webhookMap);
+    }
 
     // Process SLOs in parallel with a concurrency limit
     const queue = new PQueue({ concurrency: 10 });
@@ -234,6 +251,87 @@ export default class RunSLOChecksTask implements HdxTask<CheckSlosTaskArgs> {
 
           // Update last aggregated timestamp
           await SLO.updateOne({ _id: slo._id }, { lastAggregatedAt: endTime });
+
+          // Check burn rate and send alerts if needed
+          // Refresh SLO from DB to get latest burnAlerts config
+          try {
+            const refreshedSLO = await SLO.findById(slo._id);
+            if (!refreshedSLO) {
+              logger.warn({ sloId: slo.id }, 'SLO not found when checking burn alerts');
+              return;
+            }
+
+            const status = await getSLOStatus(refreshedSLO.id, refreshedSLO.team);
+            if (status && status.burnRate !== undefined && status.burnRate > 0) {
+              const teamWebhooks =
+                teamWebhooksMap.get(refreshedSLO.team.toString()) || new Map();
+
+              // Get webhook if configured
+              let webhook: IWebhook | undefined;
+              if (
+                refreshedSLO.burnAlerts?.enabled &&
+                refreshedSLO.burnAlerts.channel?.type === 'webhook'
+              ) {
+                webhook = teamWebhooks.get(refreshedSLO.burnAlerts.channel.webhookId);
+                if (!webhook) {
+                  logger.warn(
+                    {
+                      sloId: refreshedSLO.id,
+                      webhookId: refreshedSLO.burnAlerts.channel.webhookId,
+                    },
+                    'Webhook not found for SLO burn alert',
+                  );
+                }
+              }
+
+              // Check if we should send an alert
+              const alertCheck = await checkSLOBurnAlerts(
+                refreshedSLO,
+                status.burnRate,
+                status.achieved,
+                status.target,
+                status.errorBudgetRemaining,
+                webhook,
+              );
+
+              if (alertCheck.shouldAlert && alertCheck.severity && webhook) {
+                await sendSLOBurnAlert(
+                  refreshedSLO,
+                  status.burnRate,
+                  alertCheck.severity,
+                  webhook,
+                  status.achieved,
+                  status.target,
+                  status.errorBudgetRemaining,
+                );
+
+                // Update last alert state
+                await SLO.updateOne(
+                  { _id: refreshedSLO._id },
+                  {
+                    lastBurnAlertState: {
+                      severity: alertCheck.severity,
+                      burnRate: status.burnRate,
+                      timestamp: new Date(),
+                    },
+                  },
+                );
+              }
+            }
+          } catch (alertError: any) {
+            logger.error(
+              {
+                sloId: slo.id,
+                error: {
+                  message: alertError?.message || String(alertError),
+                  stack: alertError?.stack,
+                  name: alertError?.name,
+                },
+              },
+              'Failed to check/send SLO burn alerts',
+            );
+            // Don't fail the entire task if alert checking fails
+          }
 
           // Note: We no longer compute/insert into 'slo_measurements'.
           // The API queries 'slo_aggregates' directly for status and burn rate charts.

@@ -17,14 +17,17 @@ export interface SLOStatusResult {
   windowStart: Date;
   windowEnd: Date;
   timestamp: Date;
+  burnRate?: number; // Current burn rate
 }
 
 /**
  * Calculate SLO status from measurements or compute on-demand
+ * @param realtime - If true, compute from raw events table instead of aggregates (slower but real-time)
  */
 export async function getSLOStatus(
   sloId: string,
   teamId: ObjectId,
+  realtime: boolean = false,
 ): Promise<SLOStatusResult | null> {
   const slo = await SLO.findOne({ _id: sloId, team: teamId });
   if (!slo) {
@@ -39,34 +42,64 @@ export async function getSLOStatus(
   });
 
   try {
-    // Calculate status from slo_aggregates (Source of Truth)
     const timeWindowMs = ms(slo.timeWindow);
     const windowStart = new Date(Date.now() - timeWindowMs);
+    let numerator: number;
+    let denominator: number;
 
-    const statusQuery = `
-        SELECT 
-            sum(numerator_count) as numerator,
-            sum(denominator_count) as denominator
-        FROM default.slo_aggregates
-        WHERE slo_id = {sloId: String}
-          AND timestamp >= {windowStart: DateTime}
-    `;
+    if (realtime && slo.filter && slo.goodCondition) {
+      // Real-time computation from raw events (only works with builder mode)
+      const startTimeStr = windowStart.toISOString().slice(0, 19).replace('T', ' ');
+      const endTimeStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
-    const statusRes = await clickhouseClient.query({
-      query: statusQuery,
-      query_params: {
-        sloId: slo.id,
-        windowStart: windowStart.toISOString().slice(0, 19).replace('T', ' '),
-      },
-      format: 'JSON',
-    });
-    
-    const statusData = await statusRes.json<{
-      data: Array<{ numerator: number; denominator: number }>;
-    }>();
+      const realtimeQuery = `
+        SELECT
+          countIf(${slo.goodCondition}) as numerator,
+          count() as denominator
+        FROM default.${slo.sourceTable}
+        WHERE ${slo.filter}
+          AND Timestamp >= '${startTimeStr}'
+          AND Timestamp <= '${endTimeStr}'
+      `;
 
-    const numerator = Number(statusData.data?.[0]?.numerator || 0);
-    const denominator = Number(statusData.data?.[0]?.denominator || 0);
+      const realtimeRes = await clickhouseClient.query({
+        query: realtimeQuery,
+        format: 'JSON',
+      });
+
+      const realtimeData = (await realtimeRes.json()) as {
+        data: Array<{ numerator: number; denominator: number }>;
+      };
+
+      numerator = Number(realtimeData.data?.[0]?.numerator || 0);
+      denominator = Number(realtimeData.data?.[0]?.denominator || 0);
+    } else {
+      // Calculate status from slo_aggregates (Source of Truth - faster)
+      const statusQuery = `
+          SELECT 
+              sum(numerator_count) as numerator,
+              sum(denominator_count) as denominator
+          FROM default.slo_aggregates
+          WHERE slo_id = {sloId: String}
+            AND timestamp >= {windowStart: DateTime}
+      `;
+
+      const statusRes = await clickhouseClient.query({
+        query: statusQuery,
+        query_params: {
+          sloId: slo.id,
+          windowStart: windowStart.toISOString().slice(0, 19).replace('T', ' '),
+        },
+        format: 'JSON',
+      });
+      
+      const statusData = (await statusRes.json()) as {
+        data: Array<{ numerator: number; denominator: number }>;
+      };
+
+      numerator = Number(statusData.data?.[0]?.numerator || 0);
+      denominator = Number(statusData.data?.[0]?.denominator || 0);
+    }
 
     // If no data, return empty state
     if (denominator === 0 && numerator === 0) {
@@ -96,6 +129,13 @@ export async function getSLOStatus(
         ? (errorBudgetRemaining / errorBudgetTotal) * 100
         : 0;
 
+    // Calculate burn rate: actualErrorRate / expectedErrorRate
+    const expectedErrorRate = (1 - slo.targetValue / 100);
+    const actualErrorRate = denominator > 0 ? (1 - numerator / denominator) : 0;
+    const burnRate = expectedErrorRate > 0 
+      ? actualErrorRate / expectedErrorRate 
+      : (actualErrorRate > 0 ? Infinity : 0);
+
     // Determine status
     let status: SLOStatus;
     if (achieved >= slo.targetValue) {
@@ -120,6 +160,7 @@ export async function getSLOStatus(
       windowStart,
       windowEnd: new Date(),
       timestamp: new Date(),
+      burnRate,
     };
 
   } catch (error: any) {
@@ -186,31 +227,35 @@ export async function getSLOBurnRate(
     format: 'JSON',
   });
 
-  const data = await result.json<{
+  const data = (await result.json()) as {
     data: Array<{
       timestamp: string;
       numerator: number;
       denominator: number;
     }>;
-  }>();
+  };
 
-  // Burn rate logic: Rate of error budget consumption
-  // This simplistic view just shows error rate trends.
-  // A true "burn rate" is usually derived from a window. 
-  // Here we just return the raw failure rate per bucket for visualization.
+  // Calculate true burn rate: actualErrorRate / expectedErrorRate
+  // Burn rate of 1.0 = consuming budget evenly (will deplete exactly at window end)
+  // Burn rate of 2.0 = consuming twice as fast (will deplete in half the window)
+  const expectedErrorRate = (1 - slo.targetValue / 100);
   
   return (data.data || []).map(d => {
       const num = Number(d.numerator);
       const den = Number(d.denominator);
-      // const achieved = den > 0 ? (num / den) * 100 : 100;
-      // "Burn Rate" for visualization often means "Error Rate" relative to allowed errors.
-      // Let's just return Error Rate for now to keep the chart simple: (1 - success)
-      const errorRate = den > 0 ? (1 - num/den) * 100 : 0;
+      const achieved = den > 0 ? (num / den) * 100 : 100;
+      const actualErrorRate = den > 0 ? (1 - num/den) : 0;
+      
+      // Calculate burn rate: actualErrorRate / expectedErrorRate
+      // If expectedErrorRate is 0 (100% target), burn rate is undefined (infinite)
+      const burnRate = expectedErrorRate > 0 
+        ? actualErrorRate / expectedErrorRate 
+        : (actualErrorRate > 0 ? Infinity : 0);
       
       return {
           timestamp: new Date(d.timestamp),
-          achieved: den > 0 ? (num / den) * 100 : 100,
-          burnRate: errorRate, // Visualize spikes in errors
+          achieved,
+          burnRate,
           errorBudgetRemaining: 0 // Not computed per-bucket for this chart
       };
   });

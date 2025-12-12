@@ -18,6 +18,7 @@ export interface SLOStatusData {
   windowStart: string;
   windowEnd: string;
   timestamp: string;
+  burnRate?: number; // Current burn rate
 }
 
 interface SLOStatusCardProps {
@@ -116,6 +117,36 @@ export default function SLOStatusCard({
             {errorBudgetRemaining.toFixed(2)}% remaining
           </Text>
         </div>
+
+        {status.burnRate !== undefined && (
+          <div>
+            <Text size="sm" fw={500} mb="xs">
+              Burn Rate
+            </Text>
+            <Group gap="xs" align="center">
+              <Badge
+                color={
+                  status.burnRate >= 2
+                    ? 'red'
+                    : status.burnRate >= 1.5
+                    ? 'orange'
+                    : status.burnRate >= 1
+                    ? 'yellow'
+                    : 'green'
+                }
+                variant="light"
+                size="lg"
+              >
+                {status.burnRate.toFixed(2)}x
+              </Badge>
+              <Text size="xs" c="dimmed">
+                {status.burnRate >= 1
+                  ? `Burning ${status.burnRate.toFixed(2)}x faster than expected`
+                  : 'Burning slower than expected'}
+              </Text>
+            </Group>
+          </div>
+        )}
 
         <Group justify="space-between" mt="md">
           <Text size="xs" c="dimmed">

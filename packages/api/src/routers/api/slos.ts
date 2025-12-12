@@ -59,13 +59,17 @@ router.get(
     params: z.object({
       id: objectIdSchema,
     }),
+    query: z.object({
+      realtime: z.string().optional(), // 'true' to compute from raw events
+    }),
   }),
   async (req, res, next) => {
     try {
       const { teamId } = getNonNullUserWithTeam(req);
       const { id: sloId } = req.params;
+      const realtime = req.query.realtime === 'true';
 
-      const status = await getSLOStatus(sloId, teamId);
+      const status = await getSLOStatus(sloId, teamId, realtime);
       if (!status) {
         return res.sendStatus(404);
       }

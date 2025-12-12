@@ -21,10 +21,13 @@ import {
   SegmentedControl,
   Divider,
   LoadingOverlay,
+  Switch,
+  Paper,
 } from '@mantine/core';
-import { useForm } from 'react-hook-form';
+import { useForm, useFieldArray } from 'react-hook-form';
 import { IconPlus, IconTrash } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { WebhookService } from '@hyperdx/common-utils/dist/types';
 
 import api from './api';
 import { withAppNav } from './layout';
@@ -46,8 +49,38 @@ function SLOCreationModal({
   const [sourceTable, setSourceTable] = useState<string>('otel_logs');
   const [generatedFilter, setGeneratedFilter] = useState('');
   const [generatedGoodCondition, setGeneratedGoodCondition] = useState('');
+  const [burnAlertsEnabled, setBurnAlertsEnabled] = useState(false);
 
-  const { register, handleSubmit, reset, setValue } = useForm();
+  const { register, handleSubmit, reset, setValue, control, watch } = useForm({
+    defaultValues: {
+      burnAlerts: {
+        enabled: false,
+        thresholds: [{ burnRate: 2.0, severity: 'warning' }],
+        channel: '',
+      },
+    },
+  });
+
+  const { data: webhooksData } = api.useWebhooks([
+    WebhookService.Slack,
+    WebhookService.Generic,
+    WebhookService.IncidentIO,
+  ]);
+
+  const {
+    fields: thresholdFields,
+    append: appendThreshold,
+    remove: removeThreshold,
+  } = useFieldArray({
+    control,
+    name: 'burnAlerts.thresholds',
+  });
+
+  const webhookOptions =
+    webhooksData?.data?.map((w: any) => ({
+      value: w._id,
+      label: w.name,
+    })) || [];
 
   const handleBuilderGenerate = (filter: string, goodCondition: string) => {
     setGeneratedFilter(filter);
@@ -78,6 +111,22 @@ function SLOCreationModal({
     } else {
       delete payload.filter;
       delete payload.goodCondition;
+    }
+
+    // Format burn alerts
+    if (data.burnAlerts?.enabled) {
+      payload.burnAlerts = {
+        enabled: true,
+        thresholds: data.burnAlerts.thresholds || [],
+        channel: data.burnAlerts.channel
+          ? {
+              type: 'webhook',
+              webhookId: data.burnAlerts.channel,
+            }
+          : null,
+      };
+    } else {
+      delete payload.burnAlerts;
     }
 
     createSLO.mutate(payload, {
@@ -220,8 +269,99 @@ function SLOCreationModal({
             label="Alert Threshold (% Error Budget Remaining)"
             placeholder="10"
             type="number"
+            description="Deprecated: Use Burn Alerts below for better control"
             {...register('alertThreshold')}
           />
+
+          <Divider label="Burn Alerts" labelPosition="center" />
+
+          <Switch
+            label="Enable Burn Rate Alerts"
+            description="Get notified when error budget is being consumed faster than expected"
+            checked={burnAlertsEnabled}
+            onChange={e => {
+              setBurnAlertsEnabled(e.currentTarget.checked);
+              setValue('burnAlerts.enabled', e.currentTarget.checked);
+            }}
+          />
+
+          {burnAlertsEnabled && (
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                <Text size="sm" fw={500}>
+                  Burn Rate Thresholds
+                </Text>
+                <Text size="xs" c="dimmed">
+                  Alert when burn rate exceeds these thresholds. Burn rate of 1.0x
+                  = consuming budget evenly, 2.0x = consuming twice as fast.
+                </Text>
+
+                {thresholdFields.map((field, index) => (
+                  <Group key={field.id} align="flex-end" gap="xs">
+                    <NumberInput
+                      label="Burn Rate"
+                      placeholder="2.0"
+                      min={0}
+                      step={0.1}
+                      style={{ flex: 1 }}
+                      {...register(
+                        `burnAlerts.thresholds.${index}.burnRate` as const,
+                        {
+                          valueAsNumber: true,
+                        },
+                      )}
+                    />
+                    <Select
+                      label="Severity"
+                      data={[
+                        { value: 'warning', label: 'Warning' },
+                        { value: 'critical', label: 'Critical' },
+                      ]}
+                      style={{ width: 150 }}
+                      {...register(
+                        `burnAlerts.thresholds.${index}.severity` as const,
+                      )}
+                    />
+                    {thresholdFields.length > 1 && (
+                      <ActionIcon
+                        color="red"
+                        variant="subtle"
+                        onClick={() => removeThreshold(index)}
+                        mt="md"
+                      >
+                        <IconTrash size={16} />
+                      </ActionIcon>
+                    )}
+                  </Group>
+                ))}
+
+                <Button
+                  variant="light"
+                  size="xs"
+                  leftSection={<IconPlus size={14} />}
+                  onClick={() =>
+                    appendThreshold({ burnRate: 2.0, severity: 'warning' })
+                  }
+                  style={{ width: 'fit-content' }}
+                >
+                  Add Threshold
+                </Button>
+
+                <Select
+                  label="Notification Webhook"
+                  placeholder="Select a webhook"
+                  description="Webhook to send burn alert notifications"
+                  data={[
+                    { value: '', label: 'None' },
+                    ...webhookOptions,
+                  ]}
+                  value={watch('burnAlerts.channel') || ''}
+                  onChange={value => setValue('burnAlerts.channel', value || '')}
+                />
+              </Stack>
+            </Paper>
+          )}
+
           <Group justify="flex-end" mt="md">
             <Button variant="default" onClick={onClose}>
               Cancel

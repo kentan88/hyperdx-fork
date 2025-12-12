@@ -33,12 +33,30 @@ export interface ISLO {
   // Structured SLI definition for BubbleUp support
   filter?: string; // Base filter for the dataset (denominator) e.g. "ServiceName = 'api'"
   goodCondition?: string; // Condition for success (numerator = filter AND goodCondition) e.g. "SeverityNumber < 17"
-  alertThreshold?: number; // 80 = alert at 80% of error budget
+  alertThreshold?: number; // 80 = alert at 80% of error budget (deprecated, use burnAlerts)
+  // Burn alert configuration
+  burnAlerts?: {
+    enabled: boolean;
+    thresholds: Array<{
+      burnRate: number; // e.g., 2.0 = alert when burning twice as fast
+      severity: 'warning' | 'critical';
+    }>;
+    channel?: {
+      type: 'webhook';
+      webhookId: string;
+    } | null;
+  };
   team: ObjectId;
   createdBy?: ObjectId;
   createdAt?: Date;
   updatedAt?: Date;
   lastAggregatedAt?: Date; // Track the last time this SLO was aggregated
+  // Burn alert state tracking
+  lastBurnAlertState?: {
+    severity: 'warning' | 'critical';
+    burnRate: number;
+    timestamp: Date;
+  };
 }
 
 export type SLODocument = mongoose.HydratedDocument<ISLO>;
@@ -92,6 +110,40 @@ const SLOSchema = new Schema<ISLO>(
       type: Number,
       required: false,
     },
+    burnAlerts: {
+      type: {
+        enabled: {
+          type: Boolean,
+          default: false,
+        },
+        thresholds: [
+          {
+            burnRate: {
+              type: Number,
+              required: true,
+            },
+            severity: {
+              type: String,
+              enum: ['warning', 'critical'],
+              required: true,
+            },
+          },
+        ],
+        channel: {
+          type: {
+            type: {
+              type: String,
+              enum: ['webhook'],
+            },
+            webhookId: {
+              type: String,
+            },
+          },
+          required: false,
+        },
+      },
+      required: false,
+    },
     team: {
       type: mongoose.Schema.Types.ObjectId,
       ref: Team.modelName,
@@ -104,6 +156,21 @@ const SLOSchema = new Schema<ISLO>(
     },
     lastAggregatedAt: {
       type: Date,
+      required: false,
+    },
+    lastBurnAlertState: {
+      type: {
+        severity: {
+          type: String,
+          enum: ['warning', 'critical'],
+        },
+        burnRate: {
+          type: Number,
+        },
+        timestamp: {
+          type: Date,
+        },
+      },
       required: false,
     },
   },

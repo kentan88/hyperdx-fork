@@ -13,13 +13,19 @@ import {
   Title,
   LoadingOverlay,
   Grid,
+  Paper,
+  Switch,
+  Divider,
 } from '@mantine/core';
-import { IconTrash, IconArrowLeft } from '@tabler/icons-react';
+import { IconTrash, IconArrowLeft, IconEdit, IconPlus } from '@tabler/icons-react';
+import { useForm, useFieldArray } from 'react-hook-form';
+import { WebhookService } from '@hyperdx/common-utils/dist/types';
 import { notifications } from '@mantine/notifications';
 import {
   Area,
   AreaChart,
   CartesianGrid,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -175,7 +181,18 @@ function BurnRateChart({
           <YAxis />
           <Tooltip
             labelFormatter={label => format(new Date(label), 'MMM d HH:mm:ss')}
-            formatter={(value: number) => [value.toFixed(2), 'Burn Rate']}
+            formatter={(value: number) => [
+              `${value.toFixed(2)}x`,
+              value >= 1
+                ? `Burning ${value.toFixed(2)}x faster than expected`
+                : 'Burning slower than expected',
+            ]}
+          />
+          <ReferenceLine
+            y={1.0}
+            stroke="#868e96"
+            strokeDasharray="3 3"
+            label={{ value: 'Expected (1.0x)', position: 'insideTopRight' }}
           />
           <Area
             type="monotone"
@@ -325,35 +342,39 @@ function SLODetailsPage() {
               </Card>
             )}
 
-            <Card withBorder p="md" radius="md">
-              <Title order={4} mb="md">
-                Configuration
-              </Title>
-              <Stack gap="xs">
-                <Group justify="space-between">
-                  <Text size="sm" c="dimmed">
-                    Target
-                  </Text>
-                  <Text size="sm" fw={500}>
-                    {slo.targetValue}%
-                  </Text>
-                </Group>
-                <Group justify="space-between">
-                  <Text size="sm" c="dimmed">
-                    Time Window
-                  </Text>
-                  <Text size="sm" fw={500}>
-                    {slo.timeWindow}
-                  </Text>
-                </Group>
-                <Group justify="space-between">
-                  <Text size="sm" c="dimmed">
-                    Metric Type
-                  </Text>
-                  <Badge variant="light">{slo.metricType}</Badge>
-                </Group>
-              </Stack>
-            </Card>
+            <Stack>
+              <Card withBorder p="md" radius="md">
+                <Title order={4} mb="md">
+                  Configuration
+                </Title>
+                <Stack gap="xs">
+                  <Group justify="space-between">
+                    <Text size="sm" c="dimmed">
+                      Target
+                    </Text>
+                    <Text size="sm" fw={500}>
+                      {slo.targetValue}%
+                    </Text>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" c="dimmed">
+                      Time Window
+                    </Text>
+                    <Text size="sm" fw={500}>
+                      {slo.timeWindow}
+                    </Text>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" c="dimmed">
+                      Metric Type
+                    </Text>
+                    <Badge variant="light">{slo.metricType}</Badge>
+                  </Group>
+                </Stack>
+              </Card>
+
+              <BurnAlertsConfig slo={slo} />
+            </Stack>
           </Stack>
         </Grid.Col>
 
@@ -382,6 +403,277 @@ function SLODetailsPage() {
         />
       </Card>
     </Container>
+  );
+}
+
+function BurnAlertsConfig({ slo }: { slo: any }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const updateSLO = api.useUpdateSLO();
+  const { data: webhooksData } = api.useWebhooks([
+    WebhookService.Slack,
+    WebhookService.Generic,
+    WebhookService.IncidentIO,
+  ]);
+
+  const webhookOptions =
+    webhooksData?.data?.map((w: any) => ({
+      value: w._id,
+      label: w.name,
+    })) || [];
+
+  const {
+    register,
+    handleSubmit,
+    control,
+    reset,
+    watch,
+    setValue,
+    formState: { isDirty },
+  } = useForm({
+    defaultValues: {
+      burnAlerts: slo.burnAlerts
+        ? {
+            enabled: slo.burnAlerts.enabled || false,
+            thresholds:
+              slo.burnAlerts.thresholds?.length > 0
+                ? slo.burnAlerts.thresholds
+                : [{ burnRate: 2.0, severity: 'warning' }],
+            channel:
+              slo.burnAlerts.channel?.webhookId || null,
+          }
+        : {
+            enabled: false,
+            thresholds: [{ burnRate: 2.0, severity: 'warning' }],
+            channel: null,
+          },
+    },
+  });
+
+  const {
+    fields: thresholdFields,
+    append: appendThreshold,
+    remove: removeThreshold,
+  } = useFieldArray({
+    control,
+    name: 'burnAlerts.thresholds',
+  });
+
+  const burnAlertsEnabled = watch('burnAlerts.enabled');
+
+  const onSubmit = async (data: any) => {
+    try {
+      const payload: any = {
+        burnAlerts: data.burnAlerts.enabled
+          ? {
+              enabled: true,
+              thresholds: data.burnAlerts.thresholds || [],
+              channel: data.burnAlerts.channel
+                ? {
+                    type: 'webhook',
+                    webhookId: data.burnAlerts.channel,
+                  }
+                : null,
+            }
+          : {
+              enabled: false,
+              thresholds: [],
+              channel: null,
+            },
+      };
+
+      await updateSLO.mutateAsync({ id: slo.id, ...payload });
+      notifications.show({
+        color: 'green',
+        message: 'Burn alerts configuration updated',
+      });
+      setIsEditing(false);
+    } catch (error: any) {
+      notifications.show({
+        color: 'red',
+        message: error.message || 'Failed to update burn alerts',
+      });
+    }
+  };
+
+  const handleCancel = () => {
+    reset();
+    setIsEditing(false);
+  };
+
+  return (
+    <Card withBorder p="md" radius="md">
+      <Group justify="space-between" mb="md">
+        <Title order={4}>Burn Alerts</Title>
+        {!isEditing && (
+          <Button
+            variant="subtle"
+            size="xs"
+            leftSection={<IconEdit size={14} />}
+            onClick={() => setIsEditing(true)}
+          >
+            Edit
+          </Button>
+        )}
+      </Group>
+
+      {isEditing ? (
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <Stack gap="md">
+            <Switch
+              label="Enable Burn Rate Alerts"
+              description="Get notified when error budget is being consumed faster than expected"
+              {...register('burnAlerts.enabled')}
+            />
+
+            {burnAlertsEnabled && (
+              <Paper p="md" withBorder>
+                <Stack gap="md">
+                  <Text size="sm" fw={500}>
+                    Burn Rate Thresholds
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Alert when burn rate exceeds these thresholds. Burn rate of
+                    1.0x = consuming budget evenly, 2.0x = consuming twice as
+                    fast.
+                  </Text>
+
+                  {thresholdFields.map((field, index) => (
+                    <Group key={field.id} align="flex-end" gap="xs">
+                      <TextInput
+                        label="Burn Rate"
+                        placeholder="2.0"
+                        type="number"
+                        step="0.1"
+                        min={0}
+                        style={{ flex: 1 }}
+                        {...register(
+                          `burnAlerts.thresholds.${index}.burnRate` as const,
+                          {
+                            valueAsNumber: true,
+                          },
+                        )}
+                      />
+                      <Select
+                        label="Severity"
+                        data={[
+                          { value: 'warning', label: 'Warning' },
+                          { value: 'critical', label: 'Critical' },
+                        ]}
+                        style={{ width: 150 }}
+                        {...register(
+                          `burnAlerts.thresholds.${index}.severity` as const,
+                        )}
+                      />
+                      {thresholdFields.length > 1 && (
+                        <Button
+                          variant="subtle"
+                          color="red"
+                          size="xs"
+                          onClick={() => removeThreshold(index)}
+                          mt="md"
+                        >
+                          <IconTrash size={14} />
+                        </Button>
+                      )}
+                    </Group>
+                  ))}
+
+                  <Button
+                    variant="light"
+                    size="xs"
+                    leftSection={<IconPlus size={14} />}
+                    onClick={() =>
+                      appendThreshold({ burnRate: 2.0, severity: 'warning' })
+                    }
+                    style={{ width: 'fit-content' }}
+                  >
+                    Add Threshold
+                  </Button>
+
+                  <Select
+                    label="Notification Webhook"
+                    placeholder="Select a webhook"
+                    description="Webhook to send burn alert notifications"
+                    data={[
+                      { value: '', label: 'None' },
+                      ...webhookOptions,
+                    ]}
+                    value={watch('burnAlerts.channel') || ''}
+                    onChange={value => setValue('burnAlerts.channel', value || null)}
+                  />
+                </Stack>
+              </Paper>
+            )}
+
+            <Group justify="flex-end">
+              <Button variant="subtle" onClick={handleCancel}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!isDirty}>
+                Save
+              </Button>
+            </Group>
+          </Stack>
+        </form>
+      ) : (
+        <Stack gap="xs">
+          <Group justify="space-between">
+            <Text size="sm" c="dimmed">
+              Status
+            </Text>
+            <Badge
+              color={slo.burnAlerts?.enabled ? 'green' : 'gray'}
+              variant="light"
+            >
+              {slo.burnAlerts?.enabled ? 'Enabled' : 'Disabled'}
+            </Badge>
+          </Group>
+          {slo.burnAlerts?.enabled && (
+            <>
+              <Divider />
+              <Text size="sm" fw={500} mb="xs">
+                Thresholds
+              </Text>
+              {slo.burnAlerts.thresholds?.map(
+                (threshold: any, index: number) => (
+                  <Group key={index} justify="space-between">
+                    <Text size="sm" c="dimmed">
+                      {threshold.burnRate}x - {threshold.severity}
+                    </Text>
+                    <Badge
+                      color={
+                        threshold.severity === 'critical' ? 'red' : 'yellow'
+                      }
+                      variant="light"
+                      size="sm"
+                    >
+                      {threshold.severity}
+                    </Badge>
+                  </Group>
+                ),
+              )}
+              {slo.burnAlerts.channel?.webhookId && (
+                <>
+                  <Divider />
+                  <Group justify="space-between">
+                    <Text size="sm" c="dimmed">
+                      Webhook
+                    </Text>
+                    <Text size="sm" fw={500}>
+                      {
+                        webhookOptions.find(
+                          (w: any) => w.value === slo.burnAlerts.channel.webhookId,
+                        )?.label || 'Unknown'
+                      }
+                    </Text>
+                  </Group>
+                </>
+              )}
+            </>
+          )}
+        </Stack>
+      )}
+    </Card>
   );
 }
 

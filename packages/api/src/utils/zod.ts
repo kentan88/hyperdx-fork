@@ -259,4 +259,22 @@ export const sloSchema = z.object({
   filter: z.string().optional(),
   goodCondition: z.string().optional(),
   alertThreshold: z.number().min(0).max(100).optional(),
+  burnAlerts: z
+    .object({
+      enabled: z.boolean(),
+      thresholds: z.array(
+        z.object({
+          burnRate: z.number().min(0),
+          severity: z.enum(['warning', 'critical']),
+        }),
+      ),
+      channel: z
+        .object({
+          type: z.literal('webhook'),
+          webhookId: z.string(),
+        })
+        .nullable()
+        .optional(),
+    })
+    .optional(),
 });
